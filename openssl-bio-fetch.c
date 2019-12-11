@@ -142,10 +142,8 @@ int main(int argc, char* argv[])
             print_error_string(ssl_err, "BIO_set_conn_hostname");
             break; /* failed */
         }
-        
-        
-        /* https://www.openssl.org/docs/crypto/BIO_f_ssl.html */
-        /* This copies an internal pointer. No need to free.  */
+        BIO_set_nbio(web, 1);
+
         BIO_get_ssl(web, &ssl);
         ssl_err = ERR_get_error();
         
@@ -156,17 +154,6 @@ int main(int argc, char* argv[])
             break; /* failed */
         }
         
-        /* https://www.openssl.org/docs/ssl/ssl.html#DEALING_WITH_PROTOCOL_CONTEXTS */
-        /* https://www.openssl.org/docs/ssl/SSL_CTX_set_cipher_list.html            */
-        res = SSL_set_cipher_list(ssl, "ECDHE-ECDSA-AES256-GCM-SHA384");
-        ssl_err = ERR_get_error();
-        
-        ASSERT(1 == res);
-        if(!(1 == res))
-        {
-            print_error_string(ssl_err, "SSL_set_cipher_list");
-            break; /* failed */
-        }
 
         /* No documentation. See the source code for tls.h and s_client.c */
         res = SSL_set_tlsext_host_name(ssl, HOST_NAME);
@@ -181,75 +168,56 @@ int main(int argc, char* argv[])
         }
         
         /* https://www.openssl.org/docs/crypto/BIO_s_file.html */
-        out = BIO_new_fp(stdout, BIO_NOCLOSE);
-        ssl_err = ERR_get_error();
-        
-        ASSERT(NULL != out);
-        if(!(NULL != out))
-        {
-            print_error_string(ssl_err, "BIO_new_fp");
-            break; /* failed */
-        }
+        // SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
         printf("Start connecting\n");
         /* https://www.openssl.org/docs/crypto/BIO_s_connect.html */
         res = BIO_do_connect(web);
-        ssl_err = ERR_get_error();
-        printf("Connecting result: %d\n", res);
-        ASSERT(1 == res);
-        if(!(1 == res))
-        {
-            print_error_string(ssl_err, "BIO_do_connect");
-            break; /* failed */
+        while(res < 0 && BIO_should_retry(web)) {
+            sleep(1);
+            printf("BIO should retry \n");
+            res = BIO_do_connect(web);
         }
+        // ssl_err = ERR_get_error();
+        // printf("Connecting result: %d\n", res);
+        // ASSERT(1 == res);
+        // if(!(1 == res))
+        // {
+        //     print_error_string(ssl_err, "BIO_do_connect");
+        //     break; /* failed */
+        // }
+        // while (-1 == SSL_connect(ssl))
+        // {
+        //     int fd;
+        //     BIO_get_fd(web, &fd);
+        //     printf("FD is %d\n", fd);
+        //     fd_set fds;
+        //     FD_ZERO(&fds);
+        //     FD_SET(fd, &fds);
+        //     int err = SSL_get_error(ssl, NULL);
+        //     printf("SSL error is %d\n", err);
+        //     switch (err)
+        //     {
+        //     case SSL_ERROR_WANT_READ:
+        //         select(fd + 1, &fds, NULL, NULL, NULL);
+        //         break;
+        //     case SSL_ERROR_WANT_WRITE:
+        //         select(fd + 1, NULL, &fds, NULL, NULL);
+        //         break;
+        //     default: 
+        //         SSL_connect(ssl);
+        //     }
+        // }
+        // res = SSL_connect(ssl);
+        // ssl_err = ERR_get_error();
         
-        /* https://www.openssl.org/docs/crypto/BIO_f_ssl.html */
-        res = BIO_do_handshake(web);
-        ssl_err = ERR_get_error();
+        // ASSERT(1 == res);
+        // if(!(1 == res))
+        // {
+        //     print_error_string(ssl_err, "BIO_do_handshake");
+        //     break; /* failed */
+        // }
         
-        ASSERT(1 == res);
-        if(!(1 == res))
-        {
-            print_error_string(ssl_err, "BIO_do_handshake");
-            break; /* failed */
-        }
-        
-        /**************************************************************************************/
-        /**************************************************************************************/
-        /* You need to perform X509 verification here. There are two documents that provide   */
-        /*   guidance on the gyrations. First is RFC 5280, and second is RFC 6125. Two other  */
-        /*   documents of interest are:                                                       */
-        /*     Baseline Certificate Requirements:                                             */
-        /*       https://www.cabforum.org/Baseline_Requirements_V1_1_6.pdf                    */
-        /*     Extended Validation Certificate Requirements:                                  */
-        /*       https://www.cabforum.org/Guidelines_v1_4_3.pdf                               */
-        /*                                                                                    */
-        /* Here are the minimum steps you should perform:                                     */
-        /*   1. Call SSL_get_peer_certificate and ensure the certificate is non-NULL. It      */
-        /*      should never be NULL because Anonymous Diffie-Hellman (ADH) is not allowed.   */
-        /*   2. Call SSL_get_verify_result and ensure it returns X509_V_OK. This return value */
-        /*      depends upon your verify_callback if you provided one. If not, the library    */
-        /*      default validation is fine (and you should not need to change it).            */
-        /*   3. Verify either the CN or the SAN matches the host you attempted to connect to. */
-        /*      Note Well (N.B.): OpenSSL prior to version 1.1.0 did *NOT* perform hostname   */
-        /*      verification. If you are using OpenSSL 0.9.8 or 1.0.1, then you will need     */
-        /*      to perform hostname verification yourself. The code to get you started on     */
-        /*      hostname verification is provided in print_cn_name and print_san_name. Be     */
-        /*      sure you are sensitive to ccTLDs (don't navively transform the hostname       */
-        /*      string). http://publicsuffix.org/ might be helpful.                           */
-        /*                                                                                    */
-        /* If all three checks succeed, then you have a chance at a secure connection. But    */
-        /*   its only a chance, and you should either pin your certificates (to remove DNS,   */
-        /*   CA, and Web Hosters from the equation) or implement a Trust-On-First-Use (TOFU)  */
-        /*   scheme like Perspectives or SSH. But before you TOFU, you still have to make     */
-        /*   the customary checks to ensure the certifcate passes the sniff test.             */
-        /*                                                                                    */
-        /* Happy certificate validation hunting!                                              */
-        /**************************************************************************************/
-        /**************************************************************************************/
-        
-        
-        /* Step 1: verify a server certifcate was presented during negotiation */
-        /* https://www.openssl.org/docs/ssl/SSL_get_peer_certificate.html          */
+
         X509* cert = SSL_get_peer_certificate(ssl);
         if(cert) { X509_free(cert); } /* Free immediately */
         
@@ -276,35 +244,6 @@ int main(int argc, char* argv[])
 
         const char* hostName = BIO_get_conn_hostname(web);
         printf("%s\n", hostName);
-        /* Step 3: hostname verifcation.   */
-        /* An exercise left to the reader. */
-        
-        /**************************************************************************************/
-        /**************************************************************************************/
-        /* Now, we can finally start reading and writing to the BIO...                        */
-        /**************************************************************************************/
-        /**************************************************************************************/
-        
-        // BIO_puts(web, "GET " HOST_RESOURCE " HTTP/1.1\r\nHost: " HOST_NAME "\r\nConnection: close\r\n\r\n");
-        // BIO_puts(out, "\nFetching: " HOST_RESOURCE "\n\n");
-        
-        // int len = 0;
-        // do {
-        //     char buff[1536] = {};
-            
-        //     /* https://www.openssl.org/docs/crypto/BIO_read.html */
-        //     len = BIO_read(web, buff, sizeof(buff));
-            
-        //     if(len > 0)
-        //         BIO_write(out, buff, len);
-            
-        //     /* BIO_should_retry returns TRUE unless there's an  */
-        //     /* error. We expect an error when the server        */
-        //     /* provides the response and closes the connection. */
-            
-        // } while (len > 0 || BIO_should_retry(web));
-        
-        // ret = 0;
         
     } while (0);
     
@@ -448,14 +387,49 @@ void print_san_name(const char* label, X509* const cert)
     
 }
 
-void tls_info_callback(const SSL *ssl, int type, int val) 
+void    tls_info_callback(const SSL *s, int where, int ret)
 {
-    fprintf(stdout,"SSL_Connect:%s\n", SSL_state_string_long(ssl));
-    if(val < 0) {
-        char* buf = (char*)malloc(120*sizeof(char));
-        ERR_error_string(ERR_get_error(), buf);
-        fprintf(stdout,"%s\n", buf);
-        free(buf);
+    char   *str;
+    int     w;
+
+    /* Adapted from OpenSSL apps/s_cb.c. */
+
+    w = where & ~SSL_ST_MASK;
+
+    if (w & SSL_ST_CONNECT)
+	str = "SSL_connect";
+    else if (w & SSL_ST_ACCEPT)
+	str = "SSL_accept";
+    else
+	str = "unknown";
+
+    if (where & SSL_CB_LOOP) {
+	printf("%s:%s\n", str, SSL_state_string_long((const SSL *) s));
+    } else if (where & SSL_CB_ALERT) {
+	str = (where & SSL_CB_READ) ? "read" : "write";
+	if ((ret & 0xff) != SSL3_AD_CLOSE_NOTIFY)
+	    printf("SSL3 alert %s:%s:%s\n", str,
+		     SSL_alert_type_string_long(ret),
+		     SSL_alert_desc_string_long(ret));
+    } else if (where & SSL_CB_EXIT) {
+	if (ret == 0)
+	    printf("%s:failed in %s\n",
+		     str, SSL_state_string_long((const SSL *) s));
+	else if (ret < 0) {
+#ifndef LOG_NON_ERROR_STATES
+	    switch (SSL_get_error((SSL *) s, ret)) {
+	    case SSL_ERROR_WANT_READ:
+	    case SSL_ERROR_WANT_WRITE:
+		/* Don't log non-error states. */
+		break;
+	    default:
+#endif
+		printf("%s:error in %s",
+			 str, SSL_state_string_long((SSL *) s));
+#ifndef LOG_NON_ERROR_STATES
+	    }
+#endif
+	}
     }
 }
 int verify_callback(int preverify, X509_STORE_CTX* x509_ctx)
